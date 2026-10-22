@@ -155,7 +155,7 @@
     <button class="btn" type="button" data-mode="play" aria-pressed="true" aria-label="Воспроизведение">
       <span class="ico" aria-hidden="true"></span><span aria-hidden="true">PLAY</span>
     </button>
-    <button class="btn rec" type="button" data-mode="rec" aria-pressed="false" aria-label="Запись: каждое нажатие включает следующий эффект">
+    <button class="btn rec" type="button" data-mode="rec" aria-pressed="false" aria-label="Запись: нажатие включает эффект, следующее нажатие выключает его">
       <span class="ico" aria-hidden="true"></span><span aria-hidden="true">REC</span>
     </button>
   </div>
@@ -875,7 +875,7 @@ canvas.addEventListener('pointerdown', () => {
   burst = Math.max(burst, 1.2);
 });
 
-/* ---------- REC: each press switches on the next effect; past the last one, it switches everything off ---------- */
+/* ---------- REC: on, off, next on, off, ... through the eight effects, then back to the first ---------- */
 
 // Every effect writes into one blank object per frame. The numbers are merged by size, so overlapping fades stay sane.
 function blankFx() {
@@ -887,7 +887,7 @@ function blankFx() {
 let fx = blankFx();
 const leapDir = new THREE.Vector3();
 let active = []; // effects that are on, or still fading out: { e, level, s, on }
-let recStep = 0; // 0 = everything off, 1..N = effect number
+let recIndex = 0; // the effect the next press switches on
 
 // Each effect gets L (0 to 1, ramping in and out with REC) and s (seconds since it started).
 // The visual fields drive the room; the audio fields bend the music.
@@ -946,16 +946,18 @@ const EFFECTS = [
   } },
 ];
 
-// One press: the next effect switches on, and the previous one fades out. Past the last, everything switches off.
+// Press once: the next effect switches on. Press again: it switches off. The next press switches on the one after it.
 function pressRec() {
-  recStep = (recStep + 1) % (EFFECTS.length + 1);
-  for (const a of active) a.on = false;
-  if (recStep > 0) {
-    const e = EFFECTS[recStep - 1];
+  if (recOn) {
+    recOn = false;
+    for (const a of active) a.on = false;
+  } else {
+    const e = EFFECTS[recIndex];
+    recIndex = (recIndex + 1) % EFFECTS.length;
     if (e.start) e.start();
     active.push({ e, level: 0, s: 0, on: true });
+    recOn = true;
   }
-  recOn = recStep > 0;
   recBtn.setAttribute('aria-pressed', String(recOn));
   syncCaption();
 }
@@ -970,21 +972,26 @@ function mergeFx(f) {
   }
 }
 
-/* ---------- music: 8-bit ambient with a noise channel, bent by the effects ---------- */
+/* ---------- music: an 8-bit psych-funk groove with a noise channel, bent by the effects and the tape ---------- */
 
 const AUDIO = {};
 let actx = null;
 let tapeCents = 0; // pitch the tape gives the music: follows the transport speed, plus the effects' detune
-const STEP = 60 / 72 / 4; // one sixteenth note at 72 BPM
-const MUSIC = { step: 0, next: 0 };
+let whirrPhase = 0;
+const STEP = 60 / 104 / 4; // one sixteenth at 104 BPM
+const MUSIC = { step: 0, next: 0, dir: 1 }; // dir: +1 forward, -1 while rewinding, 0 while paused
 
-// four bars: Am9, Fmaj7, Cmaj7, G6, each a bar long
+// Four bars, one chord each: Dm7, Bbmaj7, Gm7, A7. The lead is a phrase per bar, as [step, midi] pairs.
 const CHORDS = [
-  { root: 57, notes: [60, 64, 67, 71] },
-  { root: 53, notes: [57, 60, 64] },
-  { root: 48, notes: [52, 55, 59] },
-  { root: 55, notes: [59, 62, 64] },
+  { bass: 38, pad: [50, 53, 57, 60], lead: [[0, 74], [3, 77], [6, 81], [8, 77], [11, 74], [14, 72]] },
+  { bass: 34, pad: [58, 62, 65, 69], lead: [[0, 74], [4, 77], [6, 81], [10, 77], [12, 74], [14, 70]] },
+  { bass: 43, pad: [55, 58, 62, 65], lead: [[0, 74], [3, 79], [6, 82], [8, 79], [11, 77], [14, 74]] },
+  { bass: 45, pad: [57, 61, 64, 67], lead: [[0, 73], [2, 76], [6, 81], [8, 79], [10, 76], [12, 73], [14, 69]] },
 ];
+const BASS_STEPS = [0, 3, 6, 8, 11, 14];
+const BASS_OFFSETS = [0, 12, 0, 7, 12, 10];
+const KICK_STEPS = [0, 6, 10];
+const SNARE_STEPS = [4, 12];
 
 function mtof(m) {
   return 440 * Math.pow(2, (m - 69) / 12);
@@ -993,7 +1000,7 @@ function pick(a) {
   return a[Math.floor(Math.random() * a.length)];
 }
 
-// a NES-style 25% pulse wave, built from its Fourier series
+// an NES-style pulse wave, built from its Fourier series
 function pulseWave(duty) {
   const N = 48;
   const real = new Float32Array(N);
@@ -1002,13 +1009,14 @@ function pulseWave(duty) {
   return actx.createPeriodicWave(real, imag);
 }
 
-// one note with a simple attack and release; the tape's pitch is applied at creation
-function tone(wave, midi, t, dur, vel, { attack = 0.01, release = 0.15, detune = 0, dest = AUDIO.bus } = {}) {
+// one note with a simple attack and release; the tape's pitch is applied at creation, and bend slides it in
+function tone(wave, midi, t, dur, vel, { attack = 0.01, release = 0.15, detune = 0, bend = 0, dest = AUDIO.bus } = {}) {
   const o = actx.createOscillator();
   if (typeof wave === 'string') o.type = wave;
   else o.setPeriodicWave(wave);
   o.frequency.value = mtof(midi);
-  o.detune.value = detune + tapeCents;
+  o.detune.setValueAtTime(detune + tapeCents + bend, t);
+  o.detune.linearRampToValueAtTime(detune + tapeCents, t + 0.08);
   const g = actx.createGain();
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(vel, t + attack);
@@ -1019,7 +1027,21 @@ function tone(wave, midi, t, dur, vel, { attack = 0.01, release = 0.15, detune =
   o.stop(t + dur + release + 0.05);
 }
 
-// a burst of the noise channel, the sort of hit an old console used for hats and rumble
+// the kick: a triangle that drops in pitch, the way old consoles did it
+function kick(t) {
+  const o = actx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(160, t);
+  o.frequency.exponentialRampToValueAtTime(42, t + 0.1);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.5, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+  o.connect(g).connect(AUDIO.bus);
+  o.start(t);
+  o.stop(t + 0.18);
+}
+
+// a burst of the noise channel: snares, hats, and rumble
 function noiseHit(t, dur, vel, freq) {
   const src = actx.createBufferSource();
   src.buffer = AUDIO.noise;
@@ -1035,36 +1057,56 @@ function noiseHit(t, dur, vel, freq) {
   src.start(t, Math.random() * 1.5, dur + 0.05);
 }
 
-// one sixteenth of the score: pads on the bar, bass, a square arpeggio, noise hits, and sparse blips
+// One sixteenth of the groove: kick, snare, offbeat hats, pads, a syncopated bass, the lead phrase, and an arp.
 function scheduleStep(step, t) {
-  const chord = CHORDS[Math.floor(step / 16) % CHORDS.length];
-  const s16 = step % 16;
-  if (s16 === 0) {
-    for (const m of chord.notes) {
-      tone(AUDIO.pulse, m - 12, t, 16 * STEP, 0.03, { attack: 0.9, release: 1.2, detune: Math.random() * 12 - 6 });
+  const bar = Math.floor(step / 16) % CHORDS.length;
+  const s = step % 16;
+  const c = CHORDS[bar];
+
+  // drums
+  if (KICK_STEPS.includes(s)) kick(t);
+  if (SNARE_STEPS.includes(s)) noiseHit(t, 0.14, 0.16, 1800);
+  if (s % 4 === 2) noiseHit(t, 0.03, 0.06, 7000);
+  else if (s % 2 === 1 && Math.random() < 0.3) noiseHit(t, 0.02, 0.035, 9000);
+
+  // pads: the chord held for the bar, each note as two detuned pulse voices
+  if (s === 0) {
+    for (const m of c.pad) {
+      tone(AUDIO.pulse, m, t, 15 * STEP, 0.022, { attack: 0.05, release: 0.3, detune: -7 });
+      tone(AUDIO.pulse, m, t, 15 * STEP, 0.022, { attack: 0.05, release: 0.3, detune: 7 });
     }
-    tone('triangle', chord.root - 12, t, 14 * STEP, 0.16, { attack: 0.02, release: 1.5 });
   }
-  if (s16 === 8) tone('triangle', chord.root - 12, t, 6 * STEP, 0.1, { attack: 0.01, release: 0.8 });
-  if (s16 % 2 === 0 && Math.random() < 0.5) {
-    const m = pick(chord.notes) + (Math.random() < 0.3 ? 12 : 0);
-    tone('square', m, t, 1.5 * STEP, 0.04, { attack: 0.004, release: 0.08 });
+
+  // bass: a syncopated square with octave jumps
+  const bi = BASS_STEPS.indexOf(s);
+  if (bi >= 0) tone('square', c.bass + BASS_OFFSETS[bi], t, 2 * STEP, 0.1, { attack: 0.004, release: 0.05 });
+
+  // lead: a phrase per bar, each note bending in from a little flat
+  const li = c.lead.findIndex(([ls]) => ls === s);
+  if (li >= 0) {
+    const next = li + 1 < c.lead.length ? c.lead[li + 1][0] : 16;
+    tone('square', c.lead[li][1], t, (next - s) * STEP * 0.85, 0.045, { attack: 0.01, release: 0.08, bend: -30 });
   }
-  if ((s16 === 4 || s16 === 12) && Math.random() < 0.6) noiseHit(t, 0.06, 0.12, 2400);
-  if (s16 === 14 && Math.random() < 0.25) noiseHit(t, 0.25, 0.08, 900);
-  if (s16 === 14 && Math.random() < 0.3) tone('triangle', pick(chord.notes) + 12, t, 3 * STEP, 0.06, { attack: 0.01, release: 0.6 });
+
+  // arp: short narrow pulses on the offbeats, an octave above the pads
+  if (s % 2 === 1 && Math.random() < 0.35) tone(AUDIO.pulse12, pick(c.pad) + 12, t, 1.2 * STEP, 0.02, { attack: 0.003, release: 0.06 });
 }
 
-// look a little ahead on the audio clock, so the timing never depends on the frame rate
+// Look a little ahead on the audio clock, so timing never depends on the frame rate.
+// Forward plays the groove as written; rewinding walks the same steps backwards, so the song runs back in its own time.
 function schedule() {
+  if (MUSIC.dir === 0) {
+    MUSIC.next = actx.currentTime + 0.05;
+    return;
+  }
   while (MUSIC.next < actx.currentTime + 0.15) {
     scheduleStep(MUSIC.step, MUSIC.next);
     MUSIC.next += STEP;
-    MUSIC.step = (MUSIC.step + 1) % 64;
+    MUSIC.step = (MUSIC.step + MUSIC.dir + 64) % 64;
   }
 }
 
-// a noise buffer for hiss, the noise pad, and the hits
+// a noise buffer for hiss, the noise pad, the whirr, and the hits
 function impulse(seconds, decay) {
   const len = Math.floor(actx.sampleRate * seconds);
   const buf = actx.createBuffer(2, len, actx.sampleRate);
@@ -1216,19 +1258,41 @@ function ensureAudio() {
   hiss.connect(A.hissGain).connect(A.hp);
   hiss.start();
 
+  // the whirr: a noise band that sweeps down while rewinding and up while fast-forwarding
+  const whirr = actx.createBufferSource();
+  whirr.buffer = A.noise;
+  whirr.loop = true;
+  A.whirrBp = filt('bandpass', 1000, 3);
+  A.whirrGain = gain(0);
+  whirr.connect(A.whirrBp).connect(A.whirrGain).connect(A.bus);
+  whirr.start();
+
   A.pulse = pulseWave(0.25);
+  A.pulse12 = pulseWave(0.125);
   MUSIC.next = actx.currentTime + 0.1;
   setInterval(schedule, 25);
 }
 addEventListener('pointerdown', ensureAudio);
 addEventListener('keydown', ensureAudio);
 
-// the effects reach the sound here: each one bends a different part of the chain
-function updateAudio(g) {
+// the effects reach the sound here, and so does the transport: each one bends a different part of the chain
+function updateAudio(g, dt) {
   if (!actx) return;
   const A = AUDIO;
   const now = actx.currentTime;
   const set = (p, v) => p.setTargetAtTime(v, now, 0.12);
+
+  // transport: direction for the scheduler, and the whirr and echo stretch while the tape winds
+  MUSIC.dir = mode === 'pause' ? 0 : mode === 'rew' ? -1 : 1;
+  const winding = mode === 'rew' || mode === 'ff' ? Math.min(1, Math.abs(speed) / 2) : 0;
+  const rewinding = mode === 'rew' ? winding : 0;
+  whirrPhase += dt * 1.5 * (0.2 + winding);
+  const ph = whirrPhase % 1;
+  A.whirrBp.frequency.value = mode === 'rew' ? 5200 * Math.pow(2, -ph * 4.3) : 260 * Math.pow(2, ph * 4.3);
+  set(A.whirrGain.gain, 0.16 * winding);
+  set(A.echoFb.gain, 0.3 + 0.5 * fx.well + 0.3 * rewinding);
+  set(A.echoSend.gain, 0.22 + 0.35 * fx.well + 0.3 * rewinding);
+
   const crush = Math.min(1, fx.crush + fx.dim * 0.5);
   set(A.wowDepth.gain, 0.0012 * Math.min(1, fx.wow + 0.15 * g));
   set(A.hissGain.gain, 0.02 + 0.1 * Math.min(1, fx.hiss + 0.5 * g + 0.4 * fx.dim));
@@ -1239,13 +1303,12 @@ function updateAudio(g) {
   set(A.ringDepth.gain, fx.ring);
   set(A.ring.gain, 1 - fx.ring);
   set(A.panDepth.gain, 0.9 * fx.pan);
-  set(A.echoSend.gain, 0.22 + 0.35 * fx.well);
-  set(A.echoFb.gain, 0.3 + 0.5 * fx.well);
   set(A.revOut.gain, 0.25 + 0.5 * fx.well);
   set(A.volume.gain, mode === 'pause' ? 0 : 0.8);
   setDirt(1 + 1.5 * crush, crush > 0.05 ? Math.round(24 - 20 * crush) : 0);
-  // a tape drop-out now and then, more often as the picture glitches
-  if (!calm && Math.random() < g * 0.05) {
+
+  // tape drop-outs: now and then, more often as the picture glitches or the tape chews while winding
+  if (!calm && Math.random() < (g + 0.3 * winding) * 0.05) {
     A.bus.gain.cancelScheduledValues(now);
     A.bus.gain.setValueAtTime(0, now);
     A.bus.gain.linearRampToValueAtTime(1, now + 0.08);
@@ -1325,7 +1388,7 @@ function loop(now) {
 
   // the music follows the tape: pitch goes with the speed, and the effects' detune adds to it
   tapeCents = Math.max(-900, Math.min(900, (speed - 1) * 110 + fx.detune));
-  updateAudio(g);
+  updateAudio(g, dt);
 
   // the bauble: hovers over the table, and flies off during its effect
   ball.position.set(
