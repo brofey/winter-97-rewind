@@ -1,0 +1,1406 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Winter '97 Rewind</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
+<style>
+  /* Full-bleed WebGL, a VHS caption on top, and an 8-bit cassette deck at the bottom. */
+  :root {
+    color-scheme: dark;
+    --bg: #07050a;
+    --fg: #efe3c8;
+    --dim: rgba(239, 227, 200, 0.6);
+    --ink: #1b1433;
+    --panel: #120c24;
+    --face: #3a2d63;
+    --face-hi: #6f5bff;
+    --face-lo: #1b1433;
+    --lit: #ff4fa3;
+    --rec: #ff3b4e;
+    --gold: #ffd34d;
+    --glow: rgba(255, 122, 194, 0.55);
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    overflow: hidden;
+    font-family: "VT323", ui-monospace, monospace;
+  }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .cap {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    font-size: 28px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-shadow: 0 0 8px var(--glow);
+    mix-blend-mode: difference; /* stays readable when the picture goes negative */
+    pointer-events: none;
+    padding: 16px max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+  }
+
+  .deck {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: min(100%, 440px);
+    box-sizing: border-box;
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    padding: 12px max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    background: var(--panel);
+    border-top: 4px solid var(--face-hi);
+  }
+  .deck .hint {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1.1;
+    color: var(--dim);
+    text-align: center;
+    animation: fade 1.5s ease 14s forwards;
+  }
+  @keyframes fade { to { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .deck .hint { animation: none; } }
+
+  .row { display: flex; gap: 8px; }
+
+  /* Pixel buttons: square corners, stepped bevels, no blur, and a sunken face when latched. */
+  .btn {
+    appearance: none;
+    width: 66px;
+    height: 62px;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 7px;
+    border: 0;
+    border-radius: 0;
+    color: var(--fg);
+    background: var(--face);
+    font: 8px/1 "Press Start 2P", ui-monospace, monospace;
+    letter-spacing: 0;
+    box-shadow:
+      inset -4px -4px 0 var(--face-lo),
+      inset 4px 4px 0 var(--face-hi),
+      0 0 0 4px #07050a;
+    cursor: pointer;
+    user-select: none;
+  }
+  .btn svg {
+    display: block;
+    width: 24px;
+    height: 24px;
+    fill: currentColor;
+  }
+  .btn:hover { background: #4a3c7e; }
+  .btn[aria-pressed="true"] {
+    color: var(--ink);
+    background: var(--lit);
+    box-shadow:
+      inset 4px 4px 0 var(--face-lo),
+      inset -4px -4px 0 #ffb3d6,
+      0 0 0 4px #07050a;
+  }
+  .btn.rec { color: #ff6b78; }
+  .btn.rec:hover { background: #4a3c7e; }
+  .btn.rec[aria-pressed="true"] {
+    color: #fff5f5;
+    background: var(--rec);
+    box-shadow:
+      inset 4px 4px 0 #7a1020,
+      inset -4px -4px 0 #ff8a96,
+      0 0 0 4px #07050a;
+  }
+  .btn:focus-visible { outline: 4px solid var(--gold); outline-offset: 4px; }
+
+  #msg {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    text-align: center;
+    font-size: 28px;
+  }
+  #msg[hidden] { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl" role="img" aria-label="Зимняя комната 1997 года, перематываемая VHS-лентой"></canvas>
+<div class="cap" aria-hidden="true"><span id="state">▶ PLAY</span><span id="tc">00:00:00:00</span></div>
+<nav class="deck" aria-label="Управление лентой">
+  <p class="hint" title="← и → — перемотка, R — REC">клик — разрыв · пробел — пауза · R — REC</p>
+  <div class="row">
+    <button class="btn" type="button" data-mode="rew" aria-pressed="false" aria-label="Перемотка назад">
+      <span class="ico" aria-hidden="true"></span><span aria-hidden="true">REW</span>
+    </button>
+    <button class="btn" type="button" data-mode="ff" aria-pressed="false" aria-label="Перемотка вперёд">
+      <span class="ico" aria-hidden="true"></span><span aria-hidden="true">FF</span>
+    </button>
+    <button class="btn" type="button" data-mode="pause" aria-pressed="false" aria-label="Пауза">
+      <span class="ico" aria-hidden="true"></span><span aria-hidden="true">PAUSE</span>
+    </button>
+    <button class="btn" type="button" data-mode="play" aria-pressed="true" aria-label="Воспроизведение">
+      <span class="ico" aria-hidden="true"></span><span aria-hidden="true">PLAY</span>
+    </button>
+    <button class="btn rec" type="button" data-mode="rec" aria-pressed="false" aria-label="Запись: каждое нажатие включает следующий эффект">
+      <span class="ico" aria-hidden="true"></span><span aria-hidden="true">REC</span>
+    </button>
+  </div>
+</nav>
+<p id="msg" hidden>Для этой сцены нужен WebGL 2.</p>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const DPR = Math.min(window.devicePixelRatio || 1, 1.25);
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const canvas = document.getElementById('gl');
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+} catch (err) {
+  document.getElementById('msg').hidden = false;
+  throw err;
+}
+renderer.setPixelRatio(DPR);
+renderer.setClearColor(0x07050a, 1);
+
+// Seeded random for the layout, so the city and the garland are the same on every visit.
+let seed = 1997;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+// Uniforms shared by every room material. Changing .value updates all of them at once.
+const U = {
+  uTime: { value: 0 },
+  uGlitch: { value: 0 },
+  uWarp: { value: 1 },
+  uLamp: { value: new THREE.Vector3(-2.2, 1.45, 1.9) },
+  uLampK: { value: 1 },
+  uWell: { value: new THREE.Vector3(0.8, 1.35, 0.7) },
+  uWellK: { value: 0.6 },
+  uAccent: { value: 1 },
+};
+const blankTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+blankTex.needsUpdate = true;
+
+/* ---------- shaders ---------- */
+
+const ROOM_VERT = /* glsl */ `
+uniform float uTime;
+uniform float uWarp;
+uniform float uGlitch;
+varying vec3 vN;
+varying vec3 vW;
+varying vec2 vUv;
+
+float h1(float x) { return fract(sin(x * 91.7) * 4375.5); }
+
+void main() {
+  vec3 p = position;
+  // breathing geometry: surfaces swell and sag along their normals
+  float wave = sin(p.x * 1.7 + uTime * 0.6) * sin(p.y * 1.3 - uTime * 0.45) * sin(p.z * 1.1 + uTime * 0.8);
+  p += normal * wave * 0.09 * uWarp;
+  // slab tearing: horizontal slices jump sideways during glitches
+  float slab = step(0.93, h1(floor(p.y * 6.0) + floor(uTime * 7.0)));
+  p.x += slab * uGlitch * (h1(floor(p.y * 6.0) + 3.0) - 0.5) * 0.5;
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vW = wp.xyz;
+  vN = normalize(transpose(inverse(mat3(modelMatrix))) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}`;
+
+const ROOM_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uGlitch;
+uniform float uKind;
+uniform float uSeed;
+uniform float uAlpha;
+uniform vec3 uBase;
+uniform vec3 uLamp;
+uniform float uLampK;
+uniform vec3 uWell;
+uniform float uWellK;
+uniform float uAccent;
+uniform vec4 uHole;
+uniform sampler2D uTex;
+varying vec3 vN;
+varying vec3 vW;
+varying vec2 vUv;
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 3; i++) {
+    v += a * noise(p);
+    p = p * 2.03 + vec2(17.3, 9.1);
+    a *= 0.5;
+  }
+  return v;
+}
+
+// Domain-warped lines: fbm bends them and the phase drifts, the way the stripes on the Currents cover curl.
+float flowLines(vec2 q, float t) {
+  vec2 a = vec2(fbm(q * 0.6 + vec2(0.0, t * 0.11)), fbm(q * 0.6 + vec2(5.2, 1.3) - t * 0.08));
+  vec2 b = vec2(fbm(q * 1.4 + 2.0 * a - t * 0.21), fbm(q * 1.4 - 2.0 * a + t * 0.16));
+  float s = q.y * 11.0 + 2.6 * b.x + 1.2 * a.y - t * 0.9;
+  return smoothstep(0.2, 0.8, 0.5 + 0.5 * sin(s * 3.14159));
+}
+
+// The bauble bends every pattern near it, like a gravity well with a swirl.
+vec3 bend(vec3 w) {
+  vec3 d = w - uWell;
+  float g = uWellK * exp(-dot(d, d) * 0.9);
+  vec3 dir = normalize(d + 1e-4);
+  vec3 swirl = cross(dir, vec3(0.0, 1.0, 0.0));
+  return w + (-dir * 0.9 + swirl * 0.6) * g;
+}
+
+// Violet, magenta and gold accents, used only on the sharp peaks of the lines.
+vec3 accentColor(float x) {
+  vec3 violet = vec3(0.45, 0.22, 0.95);
+  vec3 magenta = vec3(1.0, 0.22, 0.55);
+  vec3 gold = vec3(1.0, 0.7, 0.25);
+  return mix(mix(violet, magenta, smoothstep(0.0, 0.5, x)), gold, smoothstep(0.5, 1.0, x));
+}
+
+// Returns (line value, accent phase). Every kind moves with time.
+vec2 pattern(int k, vec3 w, vec3 n) {
+  float t = uTime;
+  vec3 b = bend(w);
+  if (k == 0) {                       // wallpaper: vertical lines that bend and flow
+    return vec2(flowLines(vec2(b.y, b.x * 2.4), t), b.x * 0.4 + t * 0.05);
+  }
+  if (k == 1) {                       // carpet: lines crossed with diamonds
+    vec2 q = b.xy * 2.2;
+    vec2 g = abs(fract(q * 0.7) - 0.5);
+    float diamond = 1.0 - smoothstep(0.4, 0.46, g.x + g.y);
+    return vec2(mix(flowLines(q, t), diamond, 0.35), b.x + b.y * 0.5 + t * 0.07);
+  }
+  if (k == 2) {                       // varnished wood: bent grain
+    return vec2(flowLines(vec2(b.y * 2.0, b.x * 0.5 + b.z * 0.5), t), b.z * 0.5 + t * 0.04);
+  }
+  if (k == 3) {                       // linoleum: marbled veins
+    return vec2(flowLines(b.xz * 0.9, t), b.x * 0.6 - t * 0.03);
+  }
+  if (k == 5) {                       // fabric: folds plus a moire ripple
+    float folds = flowLines(vec2(b.x, b.y * 1.6), t);
+    float moire = 0.5 + 0.5 * sin(b.x * 110.0 + b.y * 37.0 + t * 1.5);
+    return vec2(folds * 0.7 + 0.3 * moire, b.y * 0.5 + t * 0.05);
+  }
+  if (k == 6) {                       // bauble: lines wrapped around the sphere
+    return vec2(flowLines(n.xy * 2.6 + vec2(n.z * 1.7, 0.0), t * 1.2), dot(n, vec3(0.3, 0.5, 0.8)) + t * 0.1);
+  }
+  if (k == 8) {                       // lamp shade ribbing
+    return vec2(0.5 + 0.5 * sin(b.x * 90.0 + b.z * 90.0 + t * 3.0), t * 0.1);
+  }
+  if (k == 9) {                       // snow sparkle
+    float s = noise(w.xz * 45.0) * noise(w.xz * 9.0 + t * 0.1);
+    return vec2(smoothstep(0.35, 0.8, s), 0.0);
+  }
+  return vec2(0.5, 0.0);
+}
+
+void main() {
+  // window cut-out in the back wall (uHole = 0 everywhere else, so this never fires)
+  if (uHole.x < uHole.z && vW.x > uHole.x && vW.x < uHole.z && vW.y > uHole.y && vW.y < uHole.w) discard;
+
+  int k = int(uKind + 0.5);
+  vec3 n = normalize(vN);
+  vec3 V = normalize(cameraPosition - vW);
+
+  if (k == 4) {                       // apartment block: lit window grid, with a slow facade shimmer
+    vec2 q = vec2(vW.x + vW.z, vW.y) * 1.7;
+    vec2 cell = floor(q);
+    vec2 f = fract(q);
+    float win = step(0.22, f.x) * step(f.x, 0.78) * step(0.3, f.y) * step(f.y, 0.7);
+    float h = hash(cell + uSeed);
+    float on = step(0.72, h) * (1.0 - step(0.985, hash(cell + floor(uTime * 0.7 + uSeed))));
+    vec3 tint = mix(vec3(1.0, 0.74, 0.42), vec3(0.6, 0.85, 1.0), step(0.6, hash(cell + uSeed + 9.1)));
+    vec3 glow = tint * (0.75 + 0.25 * sin(uTime * 1.5 + h * 40.0));
+    float shimmer = 0.5 + 0.5 * sin(vW.y * 3.0 - uTime * 0.8 + vW.x * 1.7);
+    vec3 col = uBase * (0.6 + 0.4 * n.y + 0.35 * shimmer) + win * on * glow * 0.8;
+    col = mix(col, vec3(0.2, 0.1, 0.3), smoothstep(12.0, 55.0, length(vW - cameraPosition)) * 0.7);
+    gl_FragColor = vec4(col, 1.0);
+    return;
+  }
+
+  if (k == 7) {                       // CRT: shows the room from its own point of view
+    vec2 s = vec2(1.0 - vUv.x, vUv.y);
+    s.x += sin(s.y * 90.0 + uTime * 5.0) * 0.002 * uGlitch;
+    vec3 tv = texture2D(uTex, s).rgb;
+    tv *= 0.8 + 0.2 * sin(s.y * 600.0);
+    float snow = step(0.99 - 0.3 * uGlitch, hash(vec2(floor(uTime * 14.0), floor(s.y * 40.0))));
+    tv = mix(tv, vec3(hash(floor(s * vec2(180.0, 135.0)) + floor(uTime * 20.0))), 0.03 + 0.5 * snow * uGlitch);
+    gl_FragColor = vec4(tv * vec3(1.05, 0.95, 1.0), 1.0);
+    return;
+  }
+
+  if (k == 8) {                       // emissive lamp shades and globe
+    gl_FragColor = vec4(uBase * (0.85 + 0.35 * pattern(8, vW, n).x) * (0.3 + 0.7 * uLampK), uAlpha);
+    return;
+  }
+
+  vec2 pa = pattern(k, vW, n);
+  float p = pa.x;
+  vec3 L = uLamp - vW;
+  float d = length(L);
+  L /= d;
+  float diff = max(dot(n, L), 0.0) * 3.2 * uLampK / (1.0 + d * d * 0.35);
+  float cold = max(n.z, 0.0) * 0.2;
+  vec3 col = uBase * (0.22 + diff * vec3(1.0, 0.72, 0.42) + cold * vec3(0.5, 0.7, 1.0));
+  col *= 0.35 + 1.1 * p;
+  col += accentColor(fract(pa.y)) * pow(p, 4.0) * 0.4 * uAccent * (0.4 + diff);
+  col += pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.22 * (0.5 + 0.5 * sin(p * 10.0 + uTime));
+  // glitch: horizontal luminance strips flip
+  float strip = step(0.98, hash(vec2(floor(vW.y * 14.0), floor(uTime * 10.0))));
+  col = mix(col, 1.0 - col, strip * uGlitch * 0.6);
+  gl_FragColor = vec4(col, uAlpha);
+}`;
+
+const SKY_VERT = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vDir = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
+const SKY_FRAG = /* glsl */ `
+uniform float uTime;
+varying vec3 vDir;
+float h3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+void main() {
+  vec3 d = normalize(vDir);
+  vec3 col = mix(vec3(0.08, 0.03, 0.12), vec3(0.02, 0.015, 0.06), smoothstep(-0.05, 0.55, d.y));
+  // aurora: interference bands drifting across the sky
+  float band = 0.5 + 0.5 * sin(d.x * 9.0 + d.y * 26.0 - uTime * 0.25) * sin(d.z * 7.0 + uTime * 0.18);
+  col += band * smoothstep(0.02, 0.2, d.y) * (1.0 - smoothstep(0.35, 0.7, d.y)) * vec3(0.14, 0.05, 0.2);
+  float s = h3(floor(d * 240.0));
+  col += step(0.9965, s) * (0.6 + 0.4 * sin(uTime * 3.0 + s * 90.0)) * vec3(0.9, 0.9, 1.0);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+const FLAKE_VERT = /* glsl */ `
+uniform float uTime;
+uniform float uPR;
+uniform float uSize;
+uniform float uSpeed;
+uniform vec2 uY;
+attribute float aSeed;
+void main() {
+  vec3 p = position;
+  float range = uY.y - uY.x;
+  p.y = uY.x + mod(p.y - uY.x - uTime * uSpeed * (0.6 + aSeed), range);
+  p.x += sin(uTime * 0.6 + aSeed * 40.0) * 0.4;
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  gl_PointSize = uSize * uPR * (0.6 + aSeed) / -mv.z;
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const FLAKE_FRAG = /* glsl */ `
+uniform vec3 uColor;
+uniform float uOpacity;
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  float a = 1.0 - smoothstep(0.05, 0.5, d);
+  gl_FragColor = vec4(uColor, a * uOpacity);
+}`;
+
+const QUAD_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
+
+// Glitch pass: tape tears, tracking bar, mosaic slices, chroma split, and a feedback trail.
+const COMPOSITE_FRAG = /* glsl */ `
+uniform sampler2D tScene;
+uniform sampler2D tPrev;
+uniform float uTime;
+uniform float uGlitch;
+uniform float uTrail;
+varying vec2 vUv;
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+void main() {
+  vec2 uv = vUv;
+  float tick = floor(uTime * 12.0);
+
+  // horizontal tears: bands of rows jump sideways, more of them as glitch grows
+  float bands = 14.0 + 26.0 * hash(tick);
+  float band = floor(uv.y * bands);
+  float tear = step(1.0 - (0.015 + 0.7 * uGlitch * uGlitch), hash(band * 1.31 + tick * 7.7));
+  float shift = (hash(band * 3.7 + tick * 2.3) - 0.5) * 0.1 * (uGlitch + 0.05) * tear;
+  uv.x += shift;
+
+  // rolling VHS tracking bar with noisy edges
+  float track = exp(-pow(abs(uv.y - fract(uTime * 0.06)) * 40.0, 2.0));
+  uv.x += track * (hash2(vec2(floor(uv.y * 320.0), tick)) - 0.5) * 0.08;
+
+  // mosaic slices on heavy bursts
+  if (uGlitch > 0.55 && hash(tick * 5.3) > 0.92) {
+    vec2 cells = vec2(72.0, 44.0);
+    uv = (floor(uv * cells) + 0.5) / cells;
+  }
+
+  // chromatic split, stronger toward the edges
+  vec2 c = uv - 0.5;
+  float ca = (0.0015 + 0.012 * uGlitch) * (0.5 + 2.0 * length(c));
+  vec3 col;
+  col.r = texture2D(tScene, uv + c * ca).r;
+  col.g = texture2D(tScene, uv).g;
+  col.b = texture2D(tScene, uv - c * ca).b;
+
+  // feedback: last frame drifts through a slow flow field and bleeds back in
+  vec2 flow = vec2(sin(uv.y * 7.0 + uTime * 0.6), cos(uv.x * 5.0 - uTime * 0.45)) * (0.003 + 0.012 * uGlitch);
+  vec3 prev = texture2D(tPrev, uv + flow + vec2(shift, 0.0)).rgb;
+  gl_FragColor = vec4(max(col, prev * uTrail), 1.0);
+}`;
+
+// Final pass: scanlines, tape grain, vignette, a soft tone curve, and the negative (uInvert ramps 0 to 1).
+const FINAL_FRAG = /* glsl */ `
+uniform sampler2D tColor;
+uniform float uTime;
+uniform float uGlitch;
+uniform float uInvert;
+varying vec2 vUv;
+
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+void main() {
+  vec3 col = texture2D(tColor, vUv).rgb;
+  col *= 0.9 + 0.1 * sin(gl_FragCoord.y * 1.5708);
+  col += (hash2(gl_FragCoord.xy + floor(uTime * 24.0)) - 0.5) * (0.04 + 0.1 * uGlitch);
+  float v = length(vUv - 0.5);
+  col *= 1.0 - 0.6 * v * v;
+  col = 1.0 - exp(-col * 1.5);
+  col = mix(col, 1.0 - col, uInvert);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+/* ---------- materials and helpers ---------- */
+
+function mat(kind, base, o = {}) {
+  const alpha = o.alpha ?? 1;
+  return new THREE.ShaderMaterial({
+    vertexShader: ROOM_VERT,
+    fragmentShader: ROOM_FRAG,
+    uniforms: {
+      uTime: U.uTime,
+      uGlitch: U.uGlitch,
+      uWarp: o.still ? { value: 0 } : U.uWarp,
+      uLamp: U.uLamp,
+      uLampK: U.uLampK,
+      uWell: U.uWell,
+      uWellK: U.uWellK,
+      uAccent: U.uAccent,
+      uKind: { value: kind },
+      uBase: { value: new THREE.Color(base) },
+      uSeed: { value: o.seed ?? rnd() * 100 },
+      uAlpha: { value: alpha },
+      uHole: { value: o.hole ? new THREE.Vector4(-1.2, 0.9, 1.2, 2.7) : new THREE.Vector4() },
+      ...(o.tex ? { uTex: { value: o.tex } } : {}),
+    },
+    transparent: alpha < 1,
+    depthWrite: alpha >= 1,
+    side: o.double ? THREE.DoubleSide : THREE.FrontSide,
+  });
+}
+
+const BOX = new THREE.BoxGeometry(1, 1, 1);
+const scene = new THREE.Scene();
+
+function place(geo, m, x, y, z, parent = scene) {
+  const o = new THREE.Mesh(geo, m);
+  o.position.set(x, y, z);
+  parent.add(o);
+  return o;
+}
+function block(w, h, d, m, x, y, z, parent = scene) {
+  const o = place(BOX, m, x, y, z, parent);
+  o.scale.set(w, h, d);
+  return o;
+}
+function panel(w, h, m, x, y, z, rx = 0, ry = 0) {
+  const o = place(new THREE.PlaneGeometry(w, h, 24, 16), m, x, y, z);
+  o.rotation.set(rx, ry, 0);
+  return o;
+}
+function flakes({ count, min, max, color, size, speed, opacity }) {
+  const pos = new Float32Array(count * 3);
+  const seeds = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    pos[i * 3] = min[0] + rnd() * (max[0] - min[0]);
+    pos[i * 3 + 1] = min[1] + rnd() * (max[1] - min[1]);
+    pos[i * 3 + 2] = min[2] + rnd() * (max[2] - min[2]);
+    seeds[i] = rnd();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+  const m = new THREE.ShaderMaterial({
+    vertexShader: FLAKE_VERT,
+    fragmentShader: FLAKE_FRAG,
+    uniforms: {
+      uTime: U.uTime,
+      uPR: { value: DPR },
+      uSize: { value: size },
+      uSpeed: { value: speed },
+      uY: { value: new THREE.Vector2(min[1], max[1]) },
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+    },
+    transparent: true,
+    depthWrite: false,
+  });
+  const pts = new THREE.Points(geo, m);
+  pts.frustumCulled = false; // vertices move in the shader, so the CPU bounds are wrong
+  scene.add(pts);
+  return pts;
+}
+
+// Soft round sprite for light halos; additive so it reads as glow.
+const glowTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.2, 'rgba(255,255,255,0.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+})();
+function glow(color, size, opacity, x, y, z, parent = scene) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex,
+    color: new THREE.Color(color),
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+    opacity,
+  }));
+  s.scale.set(size, size, 1);
+  s.position.set(x, y, z);
+  parent.add(s);
+  return s;
+}
+
+/* ---------- render targets ---------- */
+
+const rtOpts = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+const sceneRT = new THREE.WebGLRenderTarget(1, 1, { ...rtOpts, samples: 4 });
+let fbRead = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+let fbWrite = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+// The TV shows the room from its own point of view, at a low resolution.
+const tvRT = new THREE.WebGLRenderTarget(320, 240, rtOpts);
+const tvCam = new THREE.PerspectiveCamera(70, 4 / 3, 0.05, 150);
+tvCam.position.set(2.3, 2.42, 0.1);
+
+/* ---------- room ---------- */
+
+const woodM = mat(2, '#6b4a2c', { seed: 4 });
+const brassM = mat(2, '#b08d4a', { seed: 18 });
+const darkM = mat(0, '#1d1a16', { seed: 19 });
+const lampM = mat(8, '#ffb36b', { double: true, seed: 33 });
+const frameM = mat(2, '#cbbb93', { seed: 1 });
+
+// shell: the back wall has its window cut in the shader
+panel(6, 3.2, mat(0, '#8c7650', { hole: true, seed: 3 }), 0, 1.6, -3);
+panel(6, 3.2, mat(0, '#7d6a4a', { seed: 9 }), -3, 1.6, 0, 0, Math.PI / 2);
+panel(6, 3.2, mat(0, '#8c7650', { seed: 14 }), 3, 1.6, 0, 0, -Math.PI / 2);
+panel(6, 6, mat(3, '#6b4a2e', { seed: 5 }), 0, 0, 0, -Math.PI / 2);
+panel(6, 6, mat(0, '#3c3328', { seed: 17 }), 0, 3.2, 0, Math.PI / 2);
+
+// window: frame, curtains, rod, sheer
+block(2.7, 0.12, 0.16, frameM, 0, 2.76, -2.92);
+block(2.7, 0.1, 0.36, frameM, 0, 0.87, -2.82);
+block(0.16, 1.98, 0.16, frameM, -1.22, 1.85, -2.92);
+block(0.16, 1.98, 0.16, frameM, 1.22, 1.85, -2.92);
+block(0.06, 1.8, 0.06, frameM, 0, 1.8, -2.9);
+block(2.4, 0.06, 0.06, frameM, 0, 1.8, -2.9);
+block(4.0, 0.04, 0.04, frameM, 0, 3.02, -2.6);
+const curtainM = mat(5, '#6e2e3c', { seed: 2, double: true });
+panel(0.9, 3.1, curtainM, -1.7, 1.55, -2.7);
+panel(0.9, 3.1, curtainM, 1.7, 1.55, -2.7);
+panel(2.5, 1.9, mat(5, '#d9d3c2', { alpha: 0.22, double: true, seed: 7 }), 0, 1.8, -2.8);
+
+// the carpet hanging on the left wall, on its brass rod
+panel(2.2, 1.7, mat(1, '#7a1d2a', { seed: 21 }), -2.94, 1.5, 0.2, 0, Math.PI / 2);
+block(0.03, 0.03, 2.4, brassM, -2.92, 2.42, 0.2);
+
+// the stenka: wall unit with a glass top, doors, and the CRT on top
+const screenM = mat(7, '#000000', { still: true, tex: tvRT.texture });
+block(0.6, 2.2, 2.6, woodM, 2.7, 1.1, 0.3);
+block(0.04, 0.95, 1.15, mat(2, '#86603a', { seed: 15 }), 2.41, 0.55, -0.27);
+block(0.04, 0.95, 1.15, mat(2, '#86603a', { seed: 16 }), 2.41, 0.55, 0.87);
+panel(2.3, 0.9, mat(5, '#8fa0c8', { alpha: 0.35, double: true, seed: 22 }), 2.36, 1.55, 0.3, 0, -Math.PI / 2);
+block(0.5, 0.45, 0.55, mat(2, '#2b2118', { seed: 8 }), 2.7, 2.42, 0.1);
+const screen = panel(0.44, 0.33, screenM, 2.44, 2.42, 0.1, 0, -Math.PI / 2);
+
+// sofa and coffee table
+const sofaM = mat(5, '#4c3d62', { seed: 12 });
+block(0.95, 0.42, 2.2, sofaM, -0.35, 0.3, 0.7);
+block(0.22, 0.8, 2.2, sofaM, -0.87, 0.75, 0.7);
+block(0.95, 0.4, 0.2, sofaM, -0.35, 0.56, -0.4);
+block(0.95, 0.4, 0.2, sofaM, -0.35, 0.56, 1.8);
+block(0.6, 0.42, 0.9, woodM, 0.8, 0.21, 0.7);
+block(0.8, 0.04, 1.2, mat(3, '#3a4a66', { seed: 6 }), 0.8, 0.44, 0.7);
+
+// floor lamp with a fringed shade
+place(new THREE.CylinderGeometry(0.2, 0.22, 0.04, 24), woodM, -2.2, 0.02, 1.9);
+block(0.04, 1.5, 0.04, woodM, -2.2, 0.77, 1.9);
+place(new THREE.CylinderGeometry(0.22, 0.34, 0.38, 28, 1, true), lampM, -2.2, 1.55, 1.9);
+const lampGlow = glow('#ffb36b', 1.9, 0.55, -2.2, 1.55, 1.9);
+
+// ceiling globe on a cord
+place(new THREE.SphereGeometry(0.22, 28, 18), lampM, 0.2, 2.8, -0.4);
+block(0.02, 0.4, 0.02, woodM, 0.2, 3.0, -0.4);
+const globeGlow = glow('#ffd49a', 1.3, 0.5, 0.2, 2.8, -0.4);
+
+// wall clock with a swinging pendulum; the hands are groups so they can turn
+place(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 32), mat(5, '#e4d9b8', { seed: 40 }), -2.0, 2.05, -2.9).rotation.x = Math.PI / 2;
+const hourG = new THREE.Group();
+hourG.position.set(-2.0, 2.05, -2.86);
+scene.add(hourG);
+block(0.025, 0.12, 0.01, darkM, 0, 0.06, 0, hourG);
+const minG = new THREE.Group();
+minG.position.set(-2.0, 2.05, -2.86);
+scene.add(minG);
+block(0.018, 0.19, 0.01, darkM, 0, 0.095, 0, minG);
+const pend = new THREE.Group();
+pend.position.set(-2.0, 1.8, -2.84);
+scene.add(pend);
+block(0.015, 0.45, 0.01, brassM, 0, -0.225, 0, pend);
+place(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 20), brassM, 0, -0.46, 0, pend).rotation.x = Math.PI / 2;
+
+// New Year tree in the back corner, with a blinking garland
+const treeG = new THREE.Group();
+treeG.position.set(2.3, 0, -2.2);
+scene.add(treeG);
+const treeM = mat(5, '#1f5a44', { seed: 30 });
+block(0.3, 0.25, 0.3, woodM, 0, 0.12, 0, treeG);
+[[0.72, 1.0, 0.75], [0.55, 0.9, 1.3], [0.36, 0.8, 1.8]].forEach(([r, h, y]) => {
+  place(new THREE.ConeGeometry(r, h, 18), treeM, 0, y, 0, treeG);
+});
+place(new THREE.OctahedronGeometry(0.11), lampM, 0, 2.3, 0, treeG);
+glow('#ff5fa8', 0.6, 0.7, 0, 2.3, 0, treeG);
+const bulbCols = [new THREE.Color('#ff5fa8'), new THREE.Color('#ffd66b'), new THREE.Color('#7ff0ff')];
+const bulbs = [];
+for (let i = 0; i < 42; i++) {
+  const t = i / 42;
+  const a = t * 16;
+  const r = 0.8 * (1 - 0.85 * t) + 0.04;
+  const x = Math.cos(a) * r;
+  const y = 0.3 + t * 1.85;
+  const z = Math.sin(a) * r;
+  const m = new THREE.MeshBasicMaterial({ color: bulbCols[i % 3].clone() });
+  place(new THREE.SphereGeometry(0.03, 8, 6), m, x, y, z, treeG);
+  const halo = glow(bulbCols[i % 3], 0.24, 0.7, x, y, z, treeG);
+  bulbs.push({ m, halo, base: bulbCols[i % 3], phase: i * 1.7 });
+}
+
+// the bauble hovering over the table, with a violet halo
+const ball = place(new THREE.SphereGeometry(0.2, 40, 28), mat(6, '#d7deef', { seed: 50 }), 0.8, 1.35, 0.7);
+const ballGlow = glow('#b9a6ff', 1.0, 0.25, 0.8, 1.35, 0.7);
+
+// a marbled knot floating in the air between the room and the city, with a halo
+const knot = place(new THREE.TorusKnotGeometry(1.0, 0.3, 200, 24, 2, 3), mat(6, '#e6dcff', { seed: 60 }), -0.4, 3.0, -9.5);
+const knotGlow = glow('#9d7bff', 4.0, 0.14, -0.4, 3.0, -9.5);
+
+// the city: panel blocks, a TV tower, snow on the ground, a few neon signs
+for (let i = 0; i < 110; i++) {
+  const w = 1.4 + rnd() * 2.6;
+  const d = 1.4 + rnd() * 2.2;
+  const h = 3 + Math.pow(rnd(), 1.4) * 14;
+  block(w, h, d, mat(4, '#131b33', { still: true, seed: rnd() * 50 }), (rnd() - 0.5) * 34, -8 + h / 2, -12 - rnd() * 28);
+}
+block(0.8, 30, 0.8, mat(2, '#c9ccd8', { still: true, seed: 70 }), -3.5, 7, -18);
+panel(160, 160, mat(9, '#9fb3d6', { still: true, seed: 80 }), 0, -8, -20, -Math.PI / 2);
+const neons = [
+  glow('#ff3fa0', 1.6, 0.6, -1.6, 1.5, -10.5),
+  glow('#40e0ff', 1.4, 0.5, 1.5, 0.8, -10.8),
+  glow('#ffd34d', 1.2, 0.5, -0.2, 3.5, -10.2),
+];
+
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(100, 32, 16),
+  new THREE.ShaderMaterial({
+    vertexShader: SKY_VERT,
+    fragmentShader: SKY_FRAG,
+    uniforms: { uTime: U.uTime },
+    side: THREE.BackSide,
+    depthWrite: false,
+  })
+);
+scene.add(sky);
+
+// snow outside the window, and dust in the lamplight inside
+flakes({ count: 1400, min: [-18, -6, -34], max: [18, 18, -8], color: '#dfe9ff', size: 45, speed: 0.9, opacity: 0.85 });
+flakes({ count: 260, min: [-2.8, 0.05, -2.6], max: [2.8, 3.1, 2.6], color: '#ffcf8a', size: 14, speed: 0.12, opacity: 0.55 });
+
+/* ---------- post-processing ---------- */
+
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quadGeo = new THREE.PlaneGeometry(2, 2);
+
+const compositeMat = new THREE.ShaderMaterial({
+  vertexShader: QUAD_VERT,
+  fragmentShader: COMPOSITE_FRAG,
+  uniforms: {
+    tScene: { value: sceneRT.texture },
+    tPrev: { value: blankTex },
+    uTime: U.uTime,
+    uGlitch: U.uGlitch,
+    uTrail: { value: 0.8 },
+  },
+  depthTest: false,
+  depthWrite: false,
+});
+const compositeScene = new THREE.Scene();
+compositeScene.add(new THREE.Mesh(quadGeo, compositeMat));
+
+const finalMat = new THREE.ShaderMaterial({
+  vertexShader: QUAD_VERT,
+  fragmentShader: FINAL_FRAG,
+  uniforms: {
+    tColor: { value: blankTex },
+    uTime: U.uTime,
+    uGlitch: U.uGlitch,
+    uInvert: { value: 0 },
+  },
+  depthTest: false,
+  depthWrite: false,
+});
+const finalScene = new THREE.Scene();
+finalScene.add(new THREE.Mesh(quadGeo, finalMat));
+
+/* ---------- camera, input, transport ---------- */
+
+const camera = new THREE.PerspectiveCamera(58, 1, 0.05, 150);
+const ptr = { x: 0, y: 0, sx: 0, sy: 0 };
+addEventListener('pointermove', (e) => {
+  ptr.x = (e.clientX / innerWidth) * 2 - 1;
+  ptr.y = (e.clientY / innerHeight) * 2 - 1;
+});
+
+// The deck. Each mode sets a target tape speed; the speed eases toward it like a real spindle.
+const TARGET = { play: 1, ff: 4, rew: -3, pause: 0 };
+const buttons = [...document.querySelectorAll('.btn')];
+const modeButtons = buttons.filter((b) => b.dataset.mode !== 'rec');
+const recBtn = buttons.find((b) => b.dataset.mode === 'rec');
+let mode = 'play';
+let speed = 1;
+
+// 8-bit icons: each 8×8 bitmap becomes one pixel-crisp path.
+const PIXELS = {
+  rew: ['........', '..#...#.', '.##..##.', '###.###.', '.##..##.', '..#...#.', '........', '........'],
+  ff: ['........', '.#...#..', '.##..##.', '.###.###', '.##..##.', '.#...#..', '........', '........'],
+  pause: ['........', '.##..##.', '.##..##.', '.##..##.', '.##..##.', '.##..##.', '.##..##.', '........'],
+  play: ['........', '..#.....', '..##....', '..###...', '..####..', '..###...', '..##....', '..#.....'],
+  rec: ['........', '..####..', '.######.', '.######.', '.######.', '.######.', '..####..', '........'],
+};
+function pixelIcon(rows) {
+  let d = '';
+  rows.forEach((row, y) => [...row].forEach((c, x) => {
+    if (c === '#') d += `M${x} ${y}h1v1h-1z`;
+  }));
+  return `<svg viewBox="0 0 8 8" shape-rendering="crispEdges" aria-hidden="true"><path d="${d}"/></svg>`;
+}
+for (const b of buttons) b.querySelector('.ico').innerHTML = pixelIcon(PIXELS[b.dataset.mode]);
+
+const LABEL = { rew: '◀◀ REW', ff: '▶▶ FF', pause: '❚❚ PAUSE', play: '▶ PLAY' };
+let recOn = false;
+const stateEl = document.getElementById('state');
+const tcEl = document.getElementById('tc');
+let stateText = '';
+function captionText() {
+  return LABEL[mode] + (recOn ? '  ● REC' : '');
+}
+function syncCaption() {
+  const st = captionText();
+  stateEl.textContent = st;
+  stateText = st;
+}
+
+function setMode(m) {
+  mode = m;
+  for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+  syncCaption();
+}
+buttons.forEach((b) => b.addEventListener('click', () => (b === recBtn ? pressRec() : setMode(b.dataset.mode))));
+
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement)) {
+    e.preventDefault();
+    setMode(mode === 'pause' ? 'play' : 'pause');
+  }
+  if (e.code === 'ArrowLeft') setMode('rew');
+  if (e.code === 'ArrowRight') setMode('ff');
+  if (e.code === 'KeyR' && !e.repeat) pressRec();
+});
+addEventListener('keyup', (e) => {
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') setMode('play');
+});
+
+// Clicks on the picture itself tear the image; the deck handles the transport.
+let burst = 0;
+canvas.addEventListener('pointerdown', () => {
+  burst = Math.max(burst, 1.2);
+});
+
+/* ---------- REC: each press switches on the next effect; past the last one, it switches everything off ---------- */
+
+// Every effect writes into one blank object per frame. The numbers are merged by size, so overlapping fades stay sane.
+function blankFx() {
+  return {
+    glitch: 0, invert: 0, dim: 0, well: 0, leap: 0, knot: 0, goal: null,
+    detune: 0, wow: 0, hiss: 0, chop: 0, crush: 0, lpClose: 0, hpSweep: 0, pan: 0, ring: 0,
+  };
+}
+let fx = blankFx();
+const leapDir = new THREE.Vector3();
+let active = []; // effects that are on, or still fading out: { e, level, s, on }
+let recStep = 0; // 0 = everything off, 1..N = effect number
+
+// Each effect gets L (0 to 1, ramping in and out with REC) and s (seconds since it started).
+// The visual fields drive the room; the audio fields bend the music.
+const EFFECTS = [
+  // 1. tracking: the tape wows, hisses and drops out
+  { calm: false, fx: (L, s, f) => {
+    f.glitch = 0.6 * L;
+    f.wow = L;
+    f.hiss = 0.6 * L;
+  } },
+  // 2. negative: the picture flips and the sound sinks into a hollow register
+  { calm: true, fx: (L, s, f) => {
+    f.invert = L;
+    f.detune = -700 * L;
+    f.hpSweep = L;
+  } },
+  // 3. stuck spindle: the tape stutters, and a gate chops the sound
+  { calm: false, fx: (L, s, f) => {
+    if (L > 0.5) f.goal = Math.sin(s * 11) > 0.2 ? -3.5 : 0.6;
+    f.glitch = 0.3 * L;
+    f.chop = L;
+  } },
+  // 4. skipped frames: the tape races ahead and the sound goes chipmunk
+  { calm: false, fx: (L, s, f) => {
+    if (L > 0.5) f.goal = 5;
+    f.glitch = 0.2 * L;
+  } },
+  // 5. interference: the picture dims and the sound goes muffled and crushed
+  { calm: true, fx: (L, s, f) => {
+    f.dim = L * (0.6 + 0.4 * Math.sin(s * 1.3));
+    f.glitch = 0.4 * L;
+    f.lpClose = L;
+    f.crush = 0.7 * L;
+    f.hiss = 0.8 * L;
+  } },
+  // 6. gravity: the bauble's well pulls, and the sound sinks into echo
+  { calm: true, fx: (L, s, f) => {
+    f.well = L * (0.7 + 0.3 * Math.sin(s * 1.1));
+    f.detune = -60 * L;
+  } },
+  // 7. bauble: it heads for a random spot in the room, and the sound drifts across the stereo field
+  { calm: true, start: () => {
+    const tx = Math.random() * 3.2 - 1.6;
+    const ty = 0.9 + Math.random() * 1.5;
+    const tz = -1.2 + Math.random() * 2.6;
+    leapDir.set(tx - 0.8, ty - 1.35, tz - 0.7);
+  }, fx: (L, s, f) => {
+    f.leap = L * (0.8 + 0.2 * Math.sin(s * 1.2));
+    f.pan = L;
+  } },
+  // 8. knot: the marble spins up, and the sound is ring-modulated into a metallic clang
+  { calm: true, fx: (L, s, f) => {
+    f.knot = L;
+    f.ring = L;
+    f.crush = 0.2 * L;
+  } },
+];
+
+// One press: the next effect switches on, and the previous one fades out. Past the last, everything switches off.
+function pressRec() {
+  recStep = (recStep + 1) % (EFFECTS.length + 1);
+  for (const a of active) a.on = false;
+  if (recStep > 0) {
+    const e = EFFECTS[recStep - 1];
+    if (e.start) e.start();
+    active.push({ e, level: 0, s: 0, on: true });
+  }
+  recOn = recStep > 0;
+  recBtn.setAttribute('aria-pressed', String(recOn));
+  syncCaption();
+}
+
+function mergeFx(f) {
+  for (const k in f) {
+    if (k === 'goal') {
+      if (f.goal !== null) fx.goal = f.goal;
+    } else if (Math.abs(f[k]) > Math.abs(fx[k])) {
+      fx[k] = f[k];
+    }
+  }
+}
+
+/* ---------- music: 8-bit ambient with a noise channel, bent by the effects ---------- */
+
+const AUDIO = {};
+let actx = null;
+let tapeCents = 0; // pitch the tape gives the music: follows the transport speed, plus the effects' detune
+const STEP = 60 / 72 / 4; // one sixteenth note at 72 BPM
+const MUSIC = { step: 0, next: 0 };
+
+// four bars: Am9, Fmaj7, Cmaj7, G6, each a bar long
+const CHORDS = [
+  { root: 57, notes: [60, 64, 67, 71] },
+  { root: 53, notes: [57, 60, 64] },
+  { root: 48, notes: [52, 55, 59] },
+  { root: 55, notes: [59, 62, 64] },
+];
+
+function mtof(m) {
+  return 440 * Math.pow(2, (m - 69) / 12);
+}
+function pick(a) {
+  return a[Math.floor(Math.random() * a.length)];
+}
+
+// a NES-style 25% pulse wave, built from its Fourier series
+function pulseWave(duty) {
+  const N = 48;
+  const real = new Float32Array(N);
+  const imag = new Float32Array(N);
+  for (let n = 1; n < N; n++) imag[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * duty);
+  return actx.createPeriodicWave(real, imag);
+}
+
+// one note with a simple attack and release; the tape's pitch is applied at creation
+function tone(wave, midi, t, dur, vel, { attack = 0.01, release = 0.15, detune = 0, dest = AUDIO.bus } = {}) {
+  const o = actx.createOscillator();
+  if (typeof wave === 'string') o.type = wave;
+  else o.setPeriodicWave(wave);
+  o.frequency.value = mtof(midi);
+  o.detune.value = detune + tapeCents;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vel, t + attack);
+  g.gain.setValueAtTime(vel, t + dur);
+  g.gain.linearRampToValueAtTime(0, t + dur + release);
+  o.connect(g).connect(dest);
+  o.start(t);
+  o.stop(t + dur + release + 0.05);
+}
+
+// a burst of the noise channel, the sort of hit an old console used for hats and rumble
+function noiseHit(t, dur, vel, freq) {
+  const src = actx.createBufferSource();
+  src.buffer = AUDIO.noise;
+  const bp = actx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = freq;
+  bp.Q.value = 1.5;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vel, t + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(bp).connect(g).connect(AUDIO.bus);
+  src.start(t, Math.random() * 1.5, dur + 0.05);
+}
+
+// one sixteenth of the score: pads on the bar, bass, a square arpeggio, noise hits, and sparse blips
+function scheduleStep(step, t) {
+  const chord = CHORDS[Math.floor(step / 16) % CHORDS.length];
+  const s16 = step % 16;
+  if (s16 === 0) {
+    for (const m of chord.notes) {
+      tone(AUDIO.pulse, m - 12, t, 16 * STEP, 0.03, { attack: 0.9, release: 1.2, detune: Math.random() * 12 - 6 });
+    }
+    tone('triangle', chord.root - 12, t, 14 * STEP, 0.16, { attack: 0.02, release: 1.5 });
+  }
+  if (s16 === 8) tone('triangle', chord.root - 12, t, 6 * STEP, 0.1, { attack: 0.01, release: 0.8 });
+  if (s16 % 2 === 0 && Math.random() < 0.5) {
+    const m = pick(chord.notes) + (Math.random() < 0.3 ? 12 : 0);
+    tone('square', m, t, 1.5 * STEP, 0.04, { attack: 0.004, release: 0.08 });
+  }
+  if ((s16 === 4 || s16 === 12) && Math.random() < 0.6) noiseHit(t, 0.06, 0.12, 2400);
+  if (s16 === 14 && Math.random() < 0.25) noiseHit(t, 0.25, 0.08, 900);
+  if (s16 === 14 && Math.random() < 0.3) tone('triangle', pick(chord.notes) + 12, t, 3 * STEP, 0.06, { attack: 0.01, release: 0.6 });
+}
+
+// look a little ahead on the audio clock, so the timing never depends on the frame rate
+function schedule() {
+  while (MUSIC.next < actx.currentTime + 0.15) {
+    scheduleStep(MUSIC.step, MUSIC.next);
+    MUSIC.next += STEP;
+    MUSIC.step = (MUSIC.step + 1) % 64;
+  }
+}
+
+// a noise buffer for hiss, the noise pad, and the hits
+function impulse(seconds, decay) {
+  const len = Math.floor(actx.sampleRate * seconds);
+  const buf = actx.createBuffer(2, len, actx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
+// the crusher: a quantised tanh curve. More steps means cleaner, fewer steps means 8-bit grit.
+let dirtKey = '';
+function setDirt(drive, steps) {
+  const key = drive.toFixed(2) + '/' + steps;
+  if (key === dirtKey) return;
+  dirtKey = key;
+  const n = 1024;
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    let y = Math.tanh(x * drive);
+    if (steps > 0) y = Math.round(y * steps) / steps;
+    c[i] = y;
+  }
+  AUDIO.shaper.curve = c;
+}
+
+// Built on the first click or key press, because browsers only allow audio after a gesture.
+function ensureAudio() {
+  if (actx) {
+    if (actx.state === 'suspended') actx.resume();
+    return;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  actx = new AC();
+  const A = AUDIO;
+  const gain = (v) => {
+    const g = actx.createGain();
+    g.gain.value = v;
+    return g;
+  };
+  const filt = (type, f, q) => {
+    const b = actx.createBiquadFilter();
+    b.type = type;
+    b.frequency.value = f;
+    b.Q.value = q;
+    return b;
+  };
+  const osc = (type, f) => {
+    const o = actx.createOscillator();
+    o.type = type;
+    o.frequency.value = f;
+    o.start();
+    return o;
+  };
+
+  // output: master <- volume (PAUSE fades it) <- dry + echo + reverb
+  A.master = gain(0.6);
+  A.master.connect(actx.destination);
+  A.volume = gain(0);
+  A.volume.connect(A.master);
+
+  // echo and reverb tails, fed from the pan stage
+  A.echoSend = gain(0.22);
+  A.echoIn = gain(1);
+  A.delay = actx.createDelay(1);
+  A.delay.delayTime.value = 0.375;
+  A.echoFb = gain(0.3);
+  A.echoOut = gain(1);
+  A.echoSend.connect(A.echoIn);
+  A.echoIn.connect(A.delay);
+  A.delay.connect(A.echoFb);
+  A.echoFb.connect(A.delay);
+  A.delay.connect(A.echoOut);
+  A.echoOut.connect(A.volume);
+  A.revSend = gain(0.2);
+  A.reverb = actx.createConvolver();
+  A.reverb.buffer = impulse(2.6, 3);
+  A.revOut = gain(0.25);
+  A.revSend.connect(A.reverb);
+  A.reverb.connect(A.revOut);
+  A.revOut.connect(A.volume);
+
+  // the tape chain: wow -> crusher -> highpass -> lowpass -> gate -> ring mod -> pan
+  A.bus = gain(1);
+  A.wow = actx.createDelay(0.1);
+  A.wow.delayTime.value = 0.012;
+  A.wowLfo = osc('sine', 5.5);
+  A.wowDepth = gain(0);
+  A.wowLfo.connect(A.wowDepth);
+  A.wowDepth.connect(A.wow.delayTime);
+  A.shaper = actx.createWaveShaper();
+  A.shaper.oversample = '2x';
+  A.hp = filt('highpass', 20, 0.5);
+  A.lp = filt('lowpass', 7000, 0.5);
+  A.gate = gain(1);
+  A.gateOsc = osc('square', 6);
+  A.gateDepth = gain(0);
+  A.gateOsc.connect(A.gateDepth);
+  A.gateDepth.connect(A.gate.gain);
+  A.ring = gain(1);
+  A.ringOsc = osc('sine', 47);
+  A.ringDepth = gain(0);
+  A.ringOsc.connect(A.ringDepth);
+  A.ringDepth.connect(A.ring.gain);
+  A.pan = actx.createStereoPanner();
+  A.panLfo = osc('sine', 0.11);
+  A.panDepth = gain(0);
+  A.panLfo.connect(A.panDepth);
+  A.panDepth.connect(A.pan.pan);
+  A.dry = gain(1);
+  A.bus.connect(A.wow);
+  A.wow.connect(A.shaper);
+  A.shaper.connect(A.hp);
+  A.hp.connect(A.lp);
+  A.lp.connect(A.gate);
+  A.gate.connect(A.ring);
+  A.ring.connect(A.pan);
+  A.pan.connect(A.dry);
+  A.dry.connect(A.volume);
+  A.pan.connect(A.echoSend);
+  A.pan.connect(A.revSend);
+  setDirt(1, 0);
+
+  // the noise channel: one buffer for everything that is noise
+  A.noise = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);
+  const nd = A.noise.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+
+  // a noise pad: a band of noise that sweeps slowly, under everything
+  const pad = actx.createBufferSource();
+  pad.buffer = A.noise;
+  pad.loop = true;
+  const padBp = filt('bandpass', 900, 0.7);
+  const padLfo = osc('sine', 0.05);
+  const padDepth = gain(450);
+  padLfo.connect(padDepth);
+  padDepth.connect(padBp.frequency);
+  const padGain = gain(0.02);
+  pad.connect(padBp).connect(padGain).connect(A.bus);
+  pad.start();
+
+  // hiss: the tape's own noise, its level set by the effects
+  const hiss = actx.createBufferSource();
+  hiss.buffer = A.noise;
+  hiss.loop = true;
+  A.hissGain = gain(0.02);
+  hiss.connect(A.hissGain).connect(A.hp);
+  hiss.start();
+
+  A.pulse = pulseWave(0.25);
+  MUSIC.next = actx.currentTime + 0.1;
+  setInterval(schedule, 25);
+}
+addEventListener('pointerdown', ensureAudio);
+addEventListener('keydown', ensureAudio);
+
+// the effects reach the sound here: each one bends a different part of the chain
+function updateAudio(g) {
+  if (!actx) return;
+  const A = AUDIO;
+  const now = actx.currentTime;
+  const set = (p, v) => p.setTargetAtTime(v, now, 0.12);
+  const crush = Math.min(1, fx.crush + fx.dim * 0.5);
+  set(A.wowDepth.gain, 0.0012 * Math.min(1, fx.wow + 0.15 * g));
+  set(A.hissGain.gain, 0.02 + 0.1 * Math.min(1, fx.hiss + 0.5 * g + 0.4 * fx.dim));
+  set(A.hp.frequency, 20 + 900 * fx.hpSweep);
+  set(A.lp.frequency, 7000 * (1 - 0.9 * fx.lpClose));
+  set(A.gateDepth.gain, 0.5 * fx.chop);
+  set(A.gate.gain, 1 - 0.5 * fx.chop);
+  set(A.ringDepth.gain, fx.ring);
+  set(A.ring.gain, 1 - fx.ring);
+  set(A.panDepth.gain, 0.9 * fx.pan);
+  set(A.echoSend.gain, 0.22 + 0.35 * fx.well);
+  set(A.echoFb.gain, 0.3 + 0.5 * fx.well);
+  set(A.revOut.gain, 0.25 + 0.5 * fx.well);
+  set(A.volume.gain, mode === 'pause' ? 0 : 0.8);
+  setDirt(1 + 1.5 * crush, crush > 0.05 ? Math.round(24 - 20 * crush) : 0);
+  // a tape drop-out now and then, more often as the picture glitches
+  if (!calm && Math.random() < g * 0.05) {
+    A.bus.gain.cancelScheduledValues(now);
+    A.bus.gain.setValueAtTime(0, now);
+    A.bus.gain.linearRampToValueAtTime(1, now + 0.08);
+  }
+}
+
+/* ---------- loop ---------- */
+
+const size = new THREE.Vector2();
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, true);
+  renderer.getDrawingBufferSize(size);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  sceneRT.setSize(size.x, size.y);
+  fbRead.setSize(size.x, size.y);
+  fbWrite.setSize(size.x, size.y);
+}
+addEventListener('resize', resize);
+resize();
+
+function fmtTC(t) {
+  const f = Math.floor((t % 1) * 30);
+  const s = Math.floor(t) % 60;
+  const m = Math.floor(t / 60) % 60;
+  const h = Math.floor(t / 3600) % 24;
+  return [h, m, s, f].map((v) => String(v).padStart(2, '0')).join(':');
+}
+
+function sin01(x) {
+  return Math.sin(Math.PI * Math.min(1, Math.max(0, x)));
+}
+
+let T = 0; // scene time on the tape
+let kSpin = 0; // knot rotation, sped up by the knot effect
+let last = performance.now();
+let frameCount = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const wall = Math.min(0.5, (now - last) / 1000);
+  const dt = Math.min(0.05, wall);
+  last = now;
+
+  // the active effects: each ramps in and out over about 0.7 seconds, and holds in between
+  fx = blankFx();
+  for (let i = active.length - 1; i >= 0; i--) {
+    const a = active[i];
+    a.s += wall;
+    a.level = Math.min(1, Math.max(0, a.level + (a.on ? wall : -wall) / 0.7));
+    if (!a.on && a.level === 0) {
+      active.splice(i, 1);
+      continue;
+    }
+    const f = blankFx();
+    a.e.fx(a.level, a.s, f);
+    mergeFx(f);
+  }
+
+  // tape transport: ease the speed toward the deck's target, or toward an effect's override
+  const goal = fx.goal !== null && mode !== 'pause' ? fx.goal : TARGET[mode];
+  speed += (goal - speed) * (1 - Math.exp(-dt * 5));
+  T += speed * dt;
+  const t = T;
+  burst *= Math.exp(-dt * 2.4);
+
+  // glitch: a constant trickle, the random bursts, extra grit at fast speeds, and the effects' own
+  const tapeFx = Math.min(1, Math.abs(speed) * 0.1);
+  const g = Math.min(1, (calm ? 0.02 : 0.12) + 0.08 * Math.sin(t * 0.9) + burst + tapeFx * 0.25 + fx.glitch);
+  U.uTime.value = t;
+  U.uGlitch.value = g;
+  U.uWarp.value = 1 + 2.2 * g;
+  U.uLampK.value = 1 - 0.85 * fx.dim;
+  U.uWellK.value = 0.6 + 1.6 * fx.well;
+  finalMat.uniforms.uInvert.value = fx.invert;
+
+  // the music follows the tape: pitch goes with the speed, and the effects' detune adds to it
+  tapeCents = Math.max(-900, Math.min(900, (speed - 1) * 110 + fx.detune));
+  updateAudio(g);
+
+  // the bauble: hovers over the table, and flies off during its effect
+  ball.position.set(
+    0.8 + Math.cos(t * 0.31) * 0.55 + leapDir.x * fx.leap,
+    1.35 + Math.sin(t * 0.53) * 0.25 + leapDir.y * fx.leap,
+    0.7 + Math.sin(t * 0.31) * 0.5 + leapDir.z * fx.leap
+  );
+  ball.rotation.set(t * 0.2, t * 0.35, 0);
+  U.uWell.value.copy(ball.position);
+  ballGlow.position.copy(ball.position);
+  ballGlow.material.opacity = 0.25 + 0.1 * Math.sin(t * 2.0);
+
+  // the knot spins up while its effect runs
+  kSpin += dt * (1 + 6 * fx.knot);
+  knot.rotation.set(kSpin * 0.15, kSpin * 0.2, 0);
+  knot.position.set(-0.4 + Math.sin(t * 0.23) * 0.5, 3.0 + Math.sin(t * 0.4) * 0.25, -9.5);
+  knotGlow.position.copy(knot.position);
+
+  pend.rotation.z = Math.sin(t * 2.6) * 0.45;
+  hourG.rotation.z = -t * 0.03;
+  minG.rotation.z = -t * 0.35;
+
+  // garland: each bulb pulses, with its halo following it
+  for (const b of bulbs) {
+    const k = 0.3 + 0.7 * Math.max(0, Math.sin(t * 5 + b.phase));
+    b.m.color.copy(b.base).multiplyScalar(k);
+    b.halo.material.opacity = 0.7 * k;
+  }
+
+  // lamps breathe, and dim smoothly during the interference effect
+  const lampK = U.uLampK.value;
+  lampGlow.material.opacity = (0.5 + 0.1 * Math.sin(t * 3.0)) * lampK;
+  globeGlow.material.opacity = 0.5 * lampK;
+  neons.forEach((n, i) => { n.material.opacity = 0.5 + 0.15 * Math.sin(t * 2.3 + i * 2.0); });
+
+  // camera drifts, breathes and rolls slightly
+  ptr.sx += (ptr.x - ptr.sx) * 0.05;
+  ptr.sy += (ptr.y - ptr.sy) * 0.05;
+  camera.position.set(
+    Math.sin(t * 0.11) * 0.85 + ptr.sx * 0.45,
+    1.45 + Math.sin(t * 0.17) * 0.12 - ptr.sy * 0.25,
+    2.35 + Math.sin(t * 0.07) * 0.4
+  );
+  camera.up.set(Math.sin(t * 0.13) * 0.12, 1, 0).normalize();
+  camera.lookAt(Math.sin(t * 0.09) * 0.5, 1.45 + Math.sin(t * 0.21) * 0.25, -3);
+  camera.fov = 58 + Math.sin(t * 0.05) * 5 + g * 10;
+  camera.updateProjectionMatrix();
+  tvCam.lookAt(Math.sin(t * 0.13) * 1.2 - 0.5, 1.6, -3);
+
+  // the caption: tape state, REC flag, and timecode
+  if (captionText() !== stateText) syncCaption();
+  tcEl.textContent = fmtTC(Math.max(0, t));
+
+  // the TV view is cheap enough at 320×240, and it only needs every other frame
+  if (frameCount++ % 2 === 0) {
+    screen.visible = false;
+    renderer.setRenderTarget(tvRT);
+    renderer.render(scene, tvCam);
+    screen.visible = true;
+  }
+
+  renderer.setRenderTarget(sceneRT);
+  renderer.render(scene, camera);
+
+  compositeMat.uniforms.tPrev.value = fbRead.texture;
+  renderer.setRenderTarget(fbWrite);
+  renderer.render(compositeScene, quadCam);
+
+  finalMat.uniforms.tColor.value = fbWrite.texture;
+  renderer.setRenderTarget(null);
+  renderer.render(finalScene, quadCam);
+
+  [fbRead, fbWrite] = [fbWrite, fbRead];
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
